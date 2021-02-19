@@ -117,7 +117,7 @@ public:
     bool remove(const Identifier& id);
 
     bool remove_hopcount(const Identifier& id, uint8_t newHopCount);
-    bool remove_hopcount_distance(const Identifier& id, units::Length newDistanceToSource);
+    bool remove_hopcount_distance(const Identifier& id, int flagRemove);
     void add_distance(CbfPacket&& packet, Clock::duration timeout, units::Length distance, const Identifier& cbf_id);
     /**
      * Update associated packet timer

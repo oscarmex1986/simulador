@@ -174,7 +174,7 @@ Router::Router(Runtime& rt, const MIB& mib) :
     routerId = routerCounter;
     if (headerFlagRouter == 0){
         fileRouter = fopen("Router.csv", "w");
-        fprintf(fileRouter, "%s,%s,%s,%s,%s\n","id","seq","dec","raw_t","raw_tgo");
+        fprintf(fileRouter, "%s,%s,%s,%s,%s,%s,%s,%s\n","id","seq","dec","raw_t","raw_tgo","d_sender","d_self","d_self_sender");
         headerFlagRouter = 1;
         fclose(fileRouter);
     }
@@ -836,6 +836,7 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
     } else if (m_cbf_buffer.remove(cbf_id)) {
         // packet has been in CBF buffer (and is now dropped)
         nh.discard();
+        std::cout << "Discarded Buf Non-Area CBF "<<"\n";
     } else {
         const HeaderType ht = packet.pdu().common().header_type;
         const Area destination = gbc.destination(ht);
@@ -851,15 +852,17 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
                 const auto progress = dist_sender - dist_local;
                 m_cbf_buffer.add(std::move(cbf), clock_cast(timeout_cbf(progress)));
                 nh.buffer();
-
+                std::cout << "Buffered pv_se Non-Area CBF "<<"\n";
             } else {
                 nh.discard();
+                std::cout << "Discarded pv_se Non-Area CBF "<<"\n";
             }
         } else {
             CbfPacket cbf { std::move(packet), *sender };
             const auto to_cbf_max = m_mib.itsGnCbfMaxTime;
             m_cbf_buffer.add(std::move(cbf), clock_cast(to_cbf_max));
             nh.buffer();
+            std::cout << "Buffered else pv_se Non-Area CBF "<< "\n";
         }
     }
     return nh;
@@ -868,8 +871,28 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
 NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packet, const MacAddress* sender)
 {
     NextHop nh;
-    
+  
     const GeoBroadcastHeader& gbc = packet.pdu().extended();
+
+    auto loc_sender = sender ? m_location_table.get_position(*sender) : NULL;
+    auto loc_self = m_local_position_vector.position();
+    auto loc_source = gbc.source_position.position();
+
+    units::Length dist_sender = 0;
+    units::Length dist_self_sender = 0;
+    if(loc_sender){
+        dist_sender = distance(loc_source,loc_sender->position());
+        dist_self_sender = distance(loc_sender->position(),loc_self);
+    }
+    units::Length dist_self = distance(loc_source,loc_self);
+
+    int flagRemove = 0;
+    if (dist_self < dist_sender){
+        if (dist_self_sender < dist_sender){
+            flagRemove = 1;
+        }
+    }
+
     const auto cbf_id = identifier(gbc.source_position.gn_addr, gbc.sequence_number);
     //detect_duplicate_packet(gbc.source_position.gn_addr, gbc.sequence_number)
     int decision = 0;
@@ -877,19 +900,19 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
         decision = 1;
         nh.transmit(std::move(packet), cBroadcastMacAddress);
         detect_duplicate_packet(gbc.source_position.gn_addr, gbc.sequence_number);//OAM
-    } else if (m_cbf_buffer.remove_hopcount_distance(cbf_id,distanceToSource)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
+    } else if (m_cbf_buffer.remove_hopcount_distance(cbf_id,flagRemove)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
     //} else if (m_cbf_buffer.remove_hopcount(cbf_id,packet.pdu().basic().hop_limit)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
     //} else if (m_cbf_buffer.remove(cbf_id)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
         //std::cout << "Entering hopcount "<< std::ostream(gbc.source_position.gn_addr.mid) <<"\n";
-        decision = 2;
+        decision = 2 + flagRemove;
         nh.discard(); 
     } else {
     //OAM BEGIN
         if (detect_duplicate_packet(gbc.source_position.gn_addr, gbc.sequence_number)){
-            decision = 3;
+            decision = 4;
             nh.discard();
         } else {
-            decision = 4;
+            decision = 5;
             const units::Duration timeout = timeout_cbf(*sender); // OAM original
             /*Clock::duration maxtimeout = clock_cast(m_mib.itsGnCbfMaxTime);
             Clock::duration fot = fotArray[routerId] - m_runtime.now();
@@ -901,14 +924,14 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
             Clock::duration fot_tout = std::max(fot,tout);
             if (fot > tout){
                 std::cout << "FoT\n";
-                decision = 5;
+                decision = 6;
             } else {
                 std::cout << "Timeout\n";
             }
             */
 
-            //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
-            m_cbf_buffer.add_distance(CbfPacket { std::move(packet), *sender }, clock_cast(timeout), distanceToSource, cbf_id);// OAM original
+            m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
+            //m_cbf_buffer.add_distance(CbfPacket { std::move(packet), *sender }, clock_cast(timeout), distanceToSource, cbf_id);// OAM original
             //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
             nh.buffer();// OAM original
 
@@ -918,7 +941,7 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
     }
 
     fileRouter = fopen("Router.csv","a");
-    fprintf(fileRouter, "%i, %li, %i, %li,%lu\n", routerId, gbc.sequence_number, decision, m_runtime.now(), fotArray[routerId]);
+    fprintf(fileRouter, "%i,%li,%i,%li,%lu,%g,%g,%g\n", routerId, gbc.sequence_number, decision, m_runtime.now(), fotArray[routerId],dist_sender.value(),dist_self.value(),dist_self_sender.value());
     fclose(fileRouter);
 
     return nh;
@@ -947,7 +970,6 @@ units::Duration Router::timeout_cbf(const MacAddress& sender) const
     const LongPositionVector* pv_se = m_location_table.get_position(sender);
     if (pv_se && pv_se->position_accuracy_indicator) {
         units::Length dist = distance(pv_se->position(), m_local_position_vector.position());
-        distanceToSource <- dist;
         timeout = timeout_cbf(dist);
     }
     return timeout;

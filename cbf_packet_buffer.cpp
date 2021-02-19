@@ -125,7 +125,7 @@ bool CbfPacketBuffer::remove_hopcount(const Identifier& id, uint8_t newHopCount)
     return packet_dropped;
 }
 
-bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, units::Length newDistanceToSource)
+bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRemove)
 {
     bool packet_dropped = false;
     
@@ -135,7 +135,7 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, units::Leng
         auto& packet = found->info;
         // OAM Obtener el hop limit del paquete existente
         uint8_t currentHopCount = packet->hop_limit();
-        if (lastPacket == id && newDistanceToSource > lastDistance){
+        if (flagRemove == 1){
             std::cout << "True: " << ++countFakeFalse << " Fake True:" << countTrue << "\n";
             m_stored_bytes -= packet->length();
             m_counter->remove(id);
