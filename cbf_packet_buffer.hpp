@@ -126,6 +126,7 @@ public:
      */
     void update(const Identifier& id, Clock::duration timeout);
 
+
     /**
      * Fetch a packet from buffer.
      *
@@ -195,6 +196,7 @@ private:
      * \return true if packet remains valid, false if end of lifetime is reached
      */
     bool reduce_lifetime(const Timer&, CbfPacket&) const;
+    bool reduce_lifetime_fot(const Timer&, CbfPacket&) const;
 
     std::list<CbfPacket> m_packets;
     timer_bimap m_timers;
@@ -205,6 +207,7 @@ private:
     TimerCallback m_timer_callback;
     Identifier lastPacket;
     units::Length lastDistance;
+    int nodeCounter;
 
 };
 
