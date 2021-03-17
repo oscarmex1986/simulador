@@ -129,7 +129,7 @@ bool CbfPacketBuffer::remove_hopcount(const Identifier& id, uint8_t newHopCount)
     return packet_dropped;
 }
 
-bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRemove)
+bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRemove, Clock::duration newTimeout)
 {
     bool packet_dropped = false;
     
@@ -148,6 +148,10 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRem
             packet_dropped = true;
         } else {
             std::cout << "Node: " << nodeCounter << " True: " << countFakeFalse << " Fake True:" << ++countTrue << "\n";
+            if (newTimeout > Clock::duration::zero()){
+                update(id,newTimeout);
+                std::cout << "Node: " << nodeCounter << " Updated Timeout\n";
+            }        
             packet_dropped = true;
         }
     }
@@ -257,6 +261,19 @@ void CbfPacketBuffer::update(const Identifier& id, Clock::duration timeout)
     }
 }
 
+void CbfPacketBuffer::update_fot(const Identifier& id, Clock::duration timeout)
+{
+    auto& id_map = m_timers.right;
+    auto found = id_map.find(id);
+    if (found != id_map.end()) {
+        const Timer& timer = found->second;
+        CbfPacket& cbf_packet = *found->info;
+        reduce_lifetime(timer, cbf_packet);
+        id_map.replace_data(found, Timer { m_runtime, timeout});
+        //m_counter->increment(id);
+    }
+}
+
 boost::optional<CbfPacket> CbfPacketBuffer::fetch(const Identifier& id)
 {
     boost::optional<CbfPacket> packet;
@@ -299,15 +316,28 @@ void CbfPacketBuffer::flush()
     Clock::duration fot = std::max(fotArray[nodeCounter],m_runtime.now()) - m_runtime.now();
     // OAM declaramos el temporizador que servira para el limite superior
     const Timer nowFot { m_runtime, fot };
-    auto end = m_timers.left.upper_bound(now);
+    //auto end = m_timers.left.upper_bound(now); // Original
     auto endFot = m_timers.left.upper_bound(nowFot);
+    // OAM For para aumentar los timers
+    for (auto it = m_timers.left.begin(); it != endFot; ++it) {
+        const Timer& timer = it->first;
+        CbfPacket& packet = *it->info;
+        bool valid_packet = reduce_lifetime(timer, packet);
+        if (valid_packet) {
+            update_fot(it->second,fot);
+        }
+    }
+    // OAM End
 
     fileBuffer = fopen("Buffer.csv","a");
     fprintf(fileBuffer, "%i,%lu,%li,%li\n", nodeCounter, m_runtime.now(), now.expiry, nowFot.expiry);
     fclose(fileBuffer);
 
     // OAM CODIGO FoT AUMENTADO
-    for (auto it = m_timers.left.begin(); it != endFot;) {
+
+    //
+    auto end = m_timers.left.upper_bound(now); // OAM
+    for (auto it = m_timers.left.begin(); it != end;) {
         // reduce LT by queuing time
         const Timer& timer = it->first;
         CbfPacket& packet = *it->info;

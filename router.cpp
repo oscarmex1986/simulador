@@ -39,7 +39,7 @@
 #include <vanetza/dcc/fot.hpp> // OAM intento por traer tgo
 
 int routerCounter = -1;
-vanetza::Clock::time_point fotArray[4000];
+//vanetza::Clock::time_point fotArray[4000];
 FILE *fileRouter;
 int headerFlagRouter = 0;
 
@@ -636,7 +636,7 @@ NextHop Router::forwarding_algorithm_selection(PendingPacketForwarding&& packet,
                 nh.transmit(std::move(packet), cBroadcastMacAddress);
                 break;
             case BroadcastForwarding::CBF:
-                nh = area_contention_based_forwarding(std::move(packet), ll ? &ll->sender : nullptr);
+                nh = area_contention_based_forwarding(std::move(packet), ll ? &ll->sender : nullptr, ll);
                 break;
             case BroadcastForwarding::Advanced:
                 nh = area_advanced_forwarding(std::move(packet), ll);
@@ -656,7 +656,16 @@ NextHop Router::forwarding_algorithm_selection(PendingPacketForwarding&& packet,
                 case UnicastForwarding::Unspecified:
                     // fall through to greedy forwarding
                 case UnicastForwarding::Greedy:
-                    nh = greedy_forwarding(std::move(packet));
+                    //nh = greedy_forwarding(std::move(packet));
+                    //OAM Begin - Modificar la reaccion cuando estamos fuera del area
+                    if(ll-> destination != cBroadcastMacAddress){
+                        nh = greedy_forwarding(std::move(packet));
+                        std::cout << "Non-Area Greedy"<<"\n";
+                    } else {
+                        nh.discard();
+                        std::cout << "Non-Area Discarded"<<"\n";
+                    }
+                    //OAM End
                     break;
                 case UnicastForwarding::CBF:
                     nh = non_area_contention_based_forwarding(std::move(packet), ll ? &ll->sender : nullptr);
@@ -868,11 +877,13 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
     return nh;
 }
 
-NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packet, const MacAddress* sender)
+NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packet, const MacAddress* sender, const LinkLayer* ll)
 {
     NextHop nh;
   
     const GeoBroadcastHeader& gbc = packet.pdu().extended();
+    auto safety_copy = packet.duplicate();
+    const GeoBroadcastHeader& safety_gbc = safety_copy.pdu().extended();
 
     auto loc_sender = sender ? m_location_table.get_position(*sender) : NULL;
     auto loc_self = m_local_position_vector.position();
@@ -880,17 +891,25 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
 
     units::Length dist_sender = 0;
     units::Length dist_self_sender = 0;
+    units::Length dist_zero = 0;
+    Clock::duration newTimeout = Clock::duration::zero();
     if(loc_sender){
         dist_sender = distance(loc_source,loc_sender->position());
         dist_self_sender = distance(loc_sender->position(),loc_self);
+        newTimeout = clock_cast(timeout_cbf(*sender));
     }
     units::Length dist_self = distance(loc_source,loc_self);
 
     int flagRemove = 0;
+    int flagSelf = 0;
     if (dist_self < dist_sender){
         if (dist_self_sender < dist_sender){
             flagRemove = 1;
         }
+    }
+    if(dist_self == dist_zero){
+        flagRemove = 1;
+        flagSelf = 1;
     }
 
     const auto cbf_id = identifier(gbc.source_position.gn_addr, gbc.sequence_number);
@@ -898,13 +917,14 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
     int decision = 0;
     if (!sender) {
         decision = 1;
+        m_cbf_buffer.add(CbfPacket { std::move(packet.duplicate()), cBroadcastMacAddress }, clock_cast(m_mib.itsGnCbfMaxTime));// OAM 
         nh.transmit(std::move(packet), cBroadcastMacAddress);
+        
         detect_duplicate_packet(gbc.source_position.gn_addr, gbc.sequence_number);//OAM
-    } else if (m_cbf_buffer.remove_hopcount_distance(cbf_id,flagRemove)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
+    } else if (m_cbf_buffer.remove_hopcount_distance(cbf_id,flagRemove,newTimeout)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
     //} else if (m_cbf_buffer.remove_hopcount(cbf_id,packet.pdu().basic().hop_limit)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
     //} else if (m_cbf_buffer.remove(cbf_id)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
-        //std::cout << "Entering hopcount "<< std::ostream(gbc.source_position.gn_addr.mid) <<"\n";
-        decision = 2 + flagRemove;
+       decision = 2 + flagRemove - flagSelf;
         nh.discard(); 
     } else {
     //OAM BEGIN
@@ -914,7 +934,7 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
         } else {
             decision = 5;
             const units::Duration timeout = timeout_cbf(*sender); // OAM original
-            /*Clock::duration maxtimeout = clock_cast(m_mib.itsGnCbfMaxTime);
+            Clock::duration maxtimeout = clock_cast(m_mib.itsGnCbfMaxTime);
             Clock::duration fot = fotArray[routerId] - m_runtime.now();
             if (m_runtime.now() >= fotArray[routerId]) {
                 fot = Clock::duration::zero();
@@ -928,11 +948,10 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
             } else {
                 std::cout << "Timeout\n";
             }
-            */
+            /**/
 
-            m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
-            //m_cbf_buffer.add_distance(CbfPacket { std::move(packet), *sender }, clock_cast(timeout), distanceToSource, cbf_id);// OAM original
-            //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
+            //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
+            m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
             nh.buffer();// OAM original
 
         }//OAM END
@@ -940,12 +959,15 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
     
     }
 
+
     fileRouter = fopen("Router.csv","a");
     fprintf(fileRouter, "%i,%li,%i,%li,%lu,%g,%g,%g\n", routerId, gbc.sequence_number, decision, m_runtime.now(), fotArray[routerId],dist_sender.value(),dist_self.value(),dist_self_sender.value());
     fclose(fileRouter);
 
     return nh;
 }
+
+
 
 units::Duration Router::timeout_cbf(units::Length prog) const
 {

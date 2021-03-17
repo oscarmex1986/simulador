@@ -457,7 +457,7 @@ private:
      * \param sender optional sender MAC address (if not first hop)
      * \return next hop
      */
-    NextHop area_contention_based_forwarding(PendingPacketForwarding&&, const MacAddress* sender);
+    NextHop area_contention_based_forwarding(PendingPacketForwarding&&, const MacAddress* sender, const LinkLayer* ll);
 
     /**
      * \brief Determine CBF buffering time for a packet.
