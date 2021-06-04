@@ -551,6 +551,7 @@ private:
 
     int routerId; // OAM
     units::Length distanceToSource;//OAM
+    vanetza::Clock::time_point seqArray[400];//OAM
 };
 
 /**

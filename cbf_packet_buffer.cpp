@@ -133,6 +133,7 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRem
 {
     bool packet_dropped = false;
     
+    int decision = 0;
     auto& id_map = m_timers.right;
     auto found = id_map.find(id);
     if (found != id_map.end()) {
@@ -145,15 +146,23 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRem
             m_counter->remove(id);
             m_packets.erase(packet);
             remove_timer(m_timers.project_left(found));
+            decision = 1;
             packet_dropped = true;
         } else {
             std::cout << "Node: " << nodeCounter << " True: " << countFakeFalse << " Fake True:" << ++countTrue << "\n";
+            decision = 2;
             if (newTimeout > Clock::duration::zero()){
                 update(id,newTimeout);
                 std::cout << "Node: " << nodeCounter << " Updated Timeout\n";
+                decision = 3;
             }        
             packet_dropped = true;
         }
+
+
+        fileBuffer = fopen("Hopcount.csv","a");
+        fprintf(fileBuffer, "%i,%lu,%i,%lu\n", nodeCounter, m_runtime.now(), decision, m_runtime.now()+newTimeout);
+        fclose(fileBuffer);
     }
 
     assert(m_packets.size() == m_timers.size());
@@ -268,7 +277,7 @@ void CbfPacketBuffer::update_fot(const Identifier& id, Clock::duration timeout)
     if (found != id_map.end()) {
         const Timer& timer = found->second;
         CbfPacket& cbf_packet = *found->info;
-        reduce_lifetime(timer, cbf_packet);
+        //reduce_lifetime(timer, cbf_packet);
         id_map.replace_data(found, Timer { m_runtime, timeout});
         //m_counter->increment(id);
     }
@@ -319,19 +328,24 @@ void CbfPacketBuffer::flush()
     //auto end = m_timers.left.upper_bound(now); // Original
     auto endFot = m_timers.left.upper_bound(nowFot);
     // OAM For para aumentar los timers
+    int valid = -1;
+    int stillValid = -1;
+    int enteredFor1 = 0;
+    int enteredFor2 = 0;
     for (auto it = m_timers.left.begin(); it != endFot; ++it) {
+        enteredFor1 = 1;
         const Timer& timer = it->first;
         CbfPacket& packet = *it->info;
         bool valid_packet = reduce_lifetime(timer, packet);
         if (valid_packet) {
+            valid = 1;
             update_fot(it->second,fot);
+        } else {
+            valid = 0;
         }
     }
     // OAM End
 
-    fileBuffer = fopen("Buffer.csv","a");
-    fprintf(fileBuffer, "%i,%lu,%li,%li\n", nodeCounter, m_runtime.now(), now.expiry, nowFot.expiry);
-    fclose(fileBuffer);
 
     // OAM CODIGO FoT AUMENTADO
 
@@ -339,12 +353,16 @@ void CbfPacketBuffer::flush()
     auto end = m_timers.left.upper_bound(now); // OAM
     for (auto it = m_timers.left.begin(); it != end;) {
         // reduce LT by queuing time
+        enteredFor2 = 1;//OAM
         const Timer& timer = it->first;
         CbfPacket& packet = *it->info;
         bool valid_packet = reduce_lifetime(timer, packet);
         m_stored_bytes -= packet.length();
         if (valid_packet) {
+            stillValid = 1;
             m_timer_callback(std::move(packet).packet());
+        } else {
+            stillValid = 0;
         }
 
         m_counter->remove(it->second);
@@ -355,6 +373,12 @@ void CbfPacketBuffer::flush()
     if (!m_timers.empty()) {
         schedule_timer();
     }
+
+
+    fileBuffer = fopen("Buffer.csv","a");
+    fprintf(fileBuffer, "%i,%lu,%li,%li,%i,%i,%i,%i\n", nodeCounter, m_runtime.now(), now.expiry, nowFot.expiry, enteredFor1, valid, enteredFor2, stillValid);
+    fclose(fileBuffer);
+
 }
 
 bool CbfPacketBuffer::reduce_lifetime(const Timer& timer, CbfPacket& packet) const

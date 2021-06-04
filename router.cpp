@@ -174,10 +174,11 @@ Router::Router(Runtime& rt, const MIB& mib) :
     routerId = routerCounter;
     if (headerFlagRouter == 0){
         fileRouter = fopen("Router.csv", "w");
-        fprintf(fileRouter, "%s,%s,%s,%s,%s,%s,%s,%s\n","id","seq","dec","raw_t","raw_tgo","d_sender","d_self","d_self_sender");
+        fprintf(fileRouter, "%s,%s,%s,%s,%s,%s,%s,%s,%s\n","id","seq","dec","raw_t","raw_tgo","d_sender","d_self","d_self_sender","raw_timeout");
         headerFlagRouter = 1;
         fclose(fileRouter);
     }
+   
 
 }
 
@@ -731,7 +732,8 @@ void Router::pass_down(const MacAddress& addr, PduPtr pdu, DownPacketPtr payload
     request.source = m_local_position_vector.gn_addr.mid();
     request.dcc_profile = map_tc_onto_profile(pdu->common().traffic_class);
     request.ether_type = geonet::ether_type;
-    request.lifetime = std::chrono::seconds(pdu->basic().lifetime.decode() / units::si::seconds);
+    //request.lifetime = std::chrono::seconds(pdu->basic().lifetime.decode() / units::si::seconds);
+    request.lifetime = clock_cast(pdu->basic().lifetime.decode());
 
     pass_down(request, std::move(pdu), std::move(payload));
 }
@@ -893,6 +895,8 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
     units::Length dist_self_sender = 0;
     units::Length dist_zero = 0;
     Clock::duration newTimeout = Clock::duration::zero();
+    Clock::duration vectorTimeout = Clock::duration::zero();
+
     if(loc_sender){
         dist_sender = distance(loc_source,loc_sender->position());
         dist_self_sender = distance(loc_sender->position(),loc_self);
@@ -949,7 +953,10 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
                 std::cout << "Timeout\n";
             }
             /**/
-
+            vectorTimeout = tout;
+            unsigned char * temp_seq = &gbc.sequence_number;
+            int sequence_number_array = *temp_seq;
+            seqArray[sequence_number_array] = m_runtime.now();
             //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
             m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
             nh.buffer();// OAM original
@@ -961,7 +968,7 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
 
 
     fileRouter = fopen("Router.csv","a");
-    fprintf(fileRouter, "%i,%li,%i,%li,%lu,%g,%g,%g\n", routerId, gbc.sequence_number, decision, m_runtime.now(), fotArray[routerId],dist_sender.value(),dist_self.value(),dist_self_sender.value());
+    fprintf(fileRouter, "%i,%li,%i,%li,%lu,%g,%g,%g,%li\n", routerId, gbc.sequence_number, decision, m_runtime.now(), fotArray[routerId],dist_sender.value(),dist_self.value(),dist_self_sender.value(),m_runtime.now()+vectorTimeout);
     fclose(fileRouter);
 
     return nh;
@@ -1235,7 +1242,8 @@ bool Router::process_extended(const ExtendedPduConstRefs<GeoBroadcastHeader>& pd
         request.source = m_local_position_vector.gn_addr.mid();
         request.dcc_profile = dcc::Profile::DP3;
         request.ether_type = geonet::ether_type;
-        request.lifetime = std::chrono::seconds(pdu->basic().lifetime.decode() / units::si::seconds);
+        //request.lifetime = std::chrono::seconds(pdu->basic().lifetime.decode() / units::si::seconds);
+        request.lifetime = clock_cast(pdu->basic().lifetime.decode());
 
         pass_down(request, std::move(pdu), std::move(payload));
     };
