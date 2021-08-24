@@ -37,11 +37,14 @@
 #include <vanetza/dcc/limeric_budget.hpp> // OAM intento por traer tgo
 #include <vanetza/dcc/transmit_rate_control.hpp> // OAM intento por traer tgo
 #include <vanetza/dcc/fot.hpp> // OAM intento por traer tgo
+#include <boost/units/systems/si/prefixes.hpp> // OAM
 
 int routerCounter = -1;
 //vanetza::Clock::time_point fotArray[4000];
 FILE *fileRouter;
 int headerFlagRouter = 0;
+
+using namespace vanetza::units::si;
 
 namespace vanetza
 {
@@ -881,6 +884,12 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
 
 NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packet, const MacAddress* sender, const LinkLayer* ll)
 {
+    using vanetza::units::degrees;
+    using boost::units::si::kilo;
+    using boost::units::si::milli;
+
+    const auto milliseconds = milli * seconds;
+
     NextHop nh;
   
     const GeoBroadcastHeader& gbc = packet.pdu().extended();
@@ -940,12 +949,13 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
             const units::Duration timeout = timeout_cbf(*sender); // OAM original
             Clock::duration maxtimeout = clock_cast(m_mib.itsGnCbfMaxTime);
             Clock::duration fot = fotArray[routerId] - m_runtime.now();
+            Clock::duration epsilon = clock_cast(5 * milliseconds);
             if (m_runtime.now() >= fotArray[routerId]) {
                 fot = Clock::duration::zero();
             }
             Clock::duration tout = clock_cast(timeout);
             //Clock::duration fot_tout = std::min(std::max(fot,tout),maxtimeout);
-            Clock::duration fot_tout = std::max(fot,tout);
+            Clock::duration fot_tout = std::max(fot + epsilon,tout);
             if (fot > tout){
                 std::cout << "FoT\n";
                 decision = 6;
@@ -953,10 +963,7 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
                 std::cout << "Timeout\n";
             }
             /**/
-            vectorTimeout = tout;
-            unsigned char * temp_seq = &gbc.sequence_number;
-            int sequence_number_array = *temp_seq;
-            seqArray[sequence_number_array] = m_runtime.now();
+            
             //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
             m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
             nh.buffer();// OAM original

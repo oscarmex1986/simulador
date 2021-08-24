@@ -158,11 +158,9 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRem
             }        
             packet_dropped = true;
         }
-
-
-        fileBuffer = fopen("Hopcount.csv","a");
-        fprintf(fileBuffer, "%i,%lu,%i,%lu\n", nodeCounter, m_runtime.now(), decision, m_runtime.now()+newTimeout);
-        fclose(fileBuffer);
+        /*fileBuffer = fopen("Hopcount.csv","a");
+        fprintf(fileBuffer, "%i,%lu,%i,%lu,%lu\n", nodeCounter, m_runtime.now(), decision, m_runtime.now()+newTimeout, packet->first_rec);
+        fclose(fileBuffer);*/
     }
 
     assert(m_packets.size() == m_timers.size());
@@ -197,6 +195,8 @@ void CbfPacketBuffer::add(CbfPacket&& packet, Clock::duration timeout)
 
     Timer timer = { m_runtime, timeout };
     const Identifier id = identifier(packet);
+    packet.first_rec = m_runtime.now();
+    packet.tout = timeout;
     m_packets.emplace_back(std::move(packet));
     using timer_value = timer_bimap::value_type;
     auto insertion = m_timers.insert(timer_value { timer, id, std::prev(m_packets.end()) });
@@ -321,8 +321,11 @@ void CbfPacketBuffer::flush()
 {
     // fetch all expired timers
     const Timer now { m_runtime, std::chrono::seconds(0) };
-    // OAM Establecemos que punto de tiempo es mayor y buscamos la diferencia contra now
+    // OAM Establecemos que punto de tiempo es mayor y buscamos la diferencia contra now y agregamos epsilon
     Clock::duration fot = std::max(fotArray[nodeCounter],m_runtime.now()) - m_runtime.now();
+    if(fot > Clock::duration::zero()){
+        fot = fot + std::chrono::milliseconds(5);
+    }
     // OAM declaramos el temporizador que servira para el limite superior
     const Timer nowFot { m_runtime, fot };
     //auto end = m_timers.left.upper_bound(now); // Original
@@ -375,9 +378,8 @@ void CbfPacketBuffer::flush()
     }
 
 
-    fileBuffer = fopen("Buffer.csv","a");
-    fprintf(fileBuffer, "%i,%lu,%li,%li,%i,%i,%i,%i\n", nodeCounter, m_runtime.now(), now.expiry, nowFot.expiry, enteredFor1, valid, enteredFor2, stillValid);
-    fclose(fileBuffer);
+    /*rintf(fileBuffer, "%i,%lu,%li,%li,%i,%i,%i,%i\n", nodeCounter, m_runtime.now(), now.expiry, nowFot.expiry, enteredFor1, valid, enteredFor2, stillValid);
+    fclose(fileBuffer);*/
 
 }
 
