@@ -18,12 +18,11 @@ bool DuplicatePacketList::check(SequenceNumber sn)
     ListElement* element = find(sn);
     if (element) {
         ++element->counter;
-        //if(element->pendingRx){
+        if(element->pendingRx){
             return true;    
-        //} else {
-        //    flagReceived(sn);
-        //    return true;
-        //}
+        } else {
+            return false;
+        }
         
     } else {
         m_elements.push_back(ListElement { sn });

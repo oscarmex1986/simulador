@@ -457,7 +457,7 @@ private:
      * \param sender optional sender MAC address (if not first hop)
      * \return next hop
      */
-    NextHop area_contention_based_forwarding(PendingPacketForwarding&&, const MacAddress* sender, const LinkLayer* ll);
+    NextHop area_contention_based_forwarding(PendingPacketForwarding&&, const MacAddress* sender);
 
     /**
      * \brief Determine CBF buffering time for a packet.
@@ -551,7 +551,6 @@ private:
 
     int routerId; // OAM
     units::Length distanceToSource;//OAM
-    vanetza::Clock::time_point seqArray[400];//OAM
 };
 
 /**

@@ -31,7 +31,7 @@ ManagementInformationBase::ManagementInformationBase() :
     itsGnBeaconServiceRetransmitTimer(3 * seconds),
     itsGnBeaconServiceMaxJitter(itsGnBeaconServiceRetransmitTimer / 4.0),
     itsGnDefaultHopLimit(10),
-    itsGnDPLLength(8),//OAM Default 8
+    itsGnDPLLength(32),//OAM Default 8
     itsGnMaxPacketLifetime(Lifetime::Base::Hundred_Seconds, 6),
     itsGnDefaultPacketLifetime(Lifetime::Base::Ten_Seconds, 1),
     itsGnMaxPacketDataRate(1000000), // OAM Default 100

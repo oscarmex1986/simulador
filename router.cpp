@@ -37,14 +37,11 @@
 #include <vanetza/dcc/limeric_budget.hpp> // OAM intento por traer tgo
 #include <vanetza/dcc/transmit_rate_control.hpp> // OAM intento por traer tgo
 #include <vanetza/dcc/fot.hpp> // OAM intento por traer tgo
-#include <boost/units/systems/si/prefixes.hpp> // OAM
 
 int routerCounter = -1;
-//vanetza::Clock::time_point fotArray[4000];
+vanetza::Clock::time_point fotArray[40000];
 FILE *fileRouter;
 int headerFlagRouter = 0;
-
-using namespace vanetza::units::si;
 
 namespace vanetza
 {
@@ -177,11 +174,10 @@ Router::Router(Runtime& rt, const MIB& mib) :
     routerId = routerCounter;
     if (headerFlagRouter == 0){
         fileRouter = fopen("Router.csv", "w");
-        fprintf(fileRouter, "%s,%s,%s,%s,%s,%s,%s,%s,%s\n","id","seq","dec","raw_t","raw_tgo","d_sender","d_self","d_self_sender","raw_timeout");
+        fprintf(fileRouter, "%s,%s,%s,%s,%s,%s,%s,%s,%s\n","id","seq","dec","raw_t","raw_tgo","d_sender","d_self","d_self_sender","timeout");
         headerFlagRouter = 1;
         fclose(fileRouter);
     }
-   
 
 }
 
@@ -631,7 +627,9 @@ NextHop Router::forwarding_algorithm_selection(PendingPacketForwarding&& packet,
 {
     NextHop nh;
     const Area& destination = packet.pdu().extended().destination(packet.pdu().common().header_type);
-    if (inside_or_at_border(destination, m_local_position_vector.position())) {
+    //const LongPositionVector* pv_se = ll ? m_location_table.get_position(ll->sender) : nullptr; //OAM
+    //if (inside_or_at_border(destination, m_local_position_vector.position()) || (pv_se && pv_se->position_accuracy_indicator && inside_or_at_border(destination, pv_se->position())) ) {
+    if (inside_or_at_border(destination, m_local_position_vector.position()) ) {
         switch (m_mib.itsGnAreaForwardingAlgorithm) {
             case BroadcastForwarding::Unspecified:
                 // do simple forwarding
@@ -640,7 +638,7 @@ NextHop Router::forwarding_algorithm_selection(PendingPacketForwarding&& packet,
                 nh.transmit(std::move(packet), cBroadcastMacAddress);
                 break;
             case BroadcastForwarding::CBF:
-                nh = area_contention_based_forwarding(std::move(packet), ll ? &ll->sender : nullptr, ll);
+                nh = area_contention_based_forwarding(std::move(packet), ll ? &ll->sender : nullptr);
                 break;
             case BroadcastForwarding::Advanced:
                 nh = area_advanced_forwarding(std::move(packet), ll);
@@ -662,13 +660,14 @@ NextHop Router::forwarding_algorithm_selection(PendingPacketForwarding&& packet,
                 case UnicastForwarding::Greedy:
                     //nh = greedy_forwarding(std::move(packet));
                     //OAM Begin - Modificar la reaccion cuando estamos fuera del area
-                    if(ll-> destination != cBroadcastMacAddress){
+                    if(ll->destination != cBroadcastMacAddress){
                         nh = greedy_forwarding(std::move(packet));
-                        std::cout << "Non-Area Greedy"<<"\n";
+                        std::cout << "Non-Area Greedy" << "\n";
                     } else {
                         nh.discard();
-                        std::cout << "Non-Area Discarded"<<"\n";
+                        std::cout << "Non-Area Discard" << "\n";
                     }
+                    //nh.discard();
                     //OAM End
                     break;
                 case UnicastForwarding::CBF:
@@ -882,19 +881,15 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
     return nh;
 }
 
-NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packet, const MacAddress* sender, const LinkLayer* ll)
+NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packet, const MacAddress* sender)
 {
-    using vanetza::units::degrees;
-    using boost::units::si::kilo;
-    using boost::units::si::milli;
-
-    const auto milliseconds = milli * seconds;
-
     NextHop nh;
   
     const GeoBroadcastHeader& gbc = packet.pdu().extended();
     auto safety_copy = packet.duplicate();
     const GeoBroadcastHeader& safety_gbc = safety_copy.pdu().extended();
+    Clock::duration vectorTimeout = Clock::duration::zero();
+    Clock::duration maxtimeout = clock_cast(m_mib.itsGnCbfMaxTime);
 
     auto loc_sender = sender ? m_location_table.get_position(*sender) : NULL;
     auto loc_self = m_local_position_vector.position();
@@ -904,8 +899,6 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
     units::Length dist_self_sender = 0;
     units::Length dist_zero = 0;
     Clock::duration newTimeout = Clock::duration::zero();
-    Clock::duration vectorTimeout = Clock::duration::zero();
-
     if(loc_sender){
         dist_sender = distance(loc_source,loc_sender->position());
         dist_self_sender = distance(loc_sender->position(),loc_self);
@@ -934,10 +927,11 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
         nh.transmit(std::move(packet), cBroadcastMacAddress);
         
         detect_duplicate_packet(gbc.source_position.gn_addr, gbc.sequence_number);//OAM
-    } else if (m_cbf_buffer.remove_hopcount_distance(cbf_id,flagRemove,newTimeout)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
+    } else if (m_cbf_buffer.remove_hopcount_distance(cbf_id,flagRemove,newTimeout,maxtimeout)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
     //} else if (m_cbf_buffer.remove_hopcount(cbf_id,packet.pdu().basic().hop_limit)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
     //} else if (m_cbf_buffer.remove(cbf_id)|| m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
-       decision = 2 + flagRemove - flagSelf;
+        //std::cout << "Entering hopcount "<< std::ostream(gbc.source_position.gn_addr.mid) <<"\n";
+        decision = 2 + flagRemove - flagSelf;
         nh.discard(); 
     } else {
     //OAM BEGIN
@@ -947,41 +941,38 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
         } else {
             decision = 5;
             const units::Duration timeout = timeout_cbf(*sender); // OAM original
-            Clock::duration maxtimeout = clock_cast(m_mib.itsGnCbfMaxTime);
+            /*
             Clock::duration fot = fotArray[routerId] - m_runtime.now();
-            Clock::duration epsilon = clock_cast(5 * milliseconds);
             if (m_runtime.now() >= fotArray[routerId]) {
                 fot = Clock::duration::zero();
             }
             Clock::duration tout = clock_cast(timeout);
             //Clock::duration fot_tout = std::min(std::max(fot,tout),maxtimeout);
-            Clock::duration fot_tout = std::max(fot + epsilon,tout);
+            Clock::duration fot_tout = std::max(fot,tout);
             if (fot > tout){
                 std::cout << "FoT\n";
                 decision = 6;
             } else {
                 std::cout << "Timeout\n";
             }
-            /**/
-            
-            //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
-            m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
+            */
+            vectorTimeout = clock_cast(timeout);
+            m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));// OAM original
+            //m_cbf_buffer.add_distance(CbfPacket { std::move(packet), *sender }, clock_cast(timeout), distanceToSource, cbf_id);// OAM original
+            //m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, fot_tout);// OAM con fot
             nh.buffer();// OAM original
 
         }//OAM END
     
     
     }
-
-
+    
     fileRouter = fopen("Router.csv","a");
     fprintf(fileRouter, "%i,%li,%i,%li,%lu,%g,%g,%g,%li\n", routerId, gbc.sequence_number, decision, m_runtime.now(), fotArray[routerId],dist_sender.value(),dist_self.value(),dist_self_sender.value(),m_runtime.now()+vectorTimeout);
     fclose(fileRouter);
-
+    /**/
     return nh;
 }
-
-
 
 units::Duration Router::timeout_cbf(units::Length prog) const
 {
@@ -991,7 +982,16 @@ units::Duration Router::timeout_cbf(units::Length prog) const
     const auto to_cbf_max = m_mib.itsGnCbfMaxTime;
 
     if (prog > dist_max) {
-        return to_cbf_min;
+        //return to_cbf_min; //OAM Original
+        int extradist = (int)std::floor(prog / dist_max);
+        units::Duration to_cbf_max_extradist = to_cbf_max ;
+        auto dist_max_extradist = 0 * units::si::meter;
+        for(int i=0; i<extradist;i++){
+            to_cbf_max_extradist += to_cbf_max;
+            dist_max_extradist += dist_max;
+        }
+        auto restodist = prog - dist_max_extradist;
+        return (to_cbf_max_extradist) + ((to_cbf_min - to_cbf_max) / dist_max) * restodist;
     } else if (prog > 0.0 * units::si::meter) {
         return to_cbf_max + (to_cbf_min - to_cbf_max) / dist_max * prog;
     } else {

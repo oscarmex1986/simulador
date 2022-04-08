@@ -7,13 +7,16 @@
 #include <cassert>
 #include <iterator>
 #include <iostream>
+#include <vanetza/dcc/limeric.hpp> // OAM intento por traer tgo
+#include <vanetza/dcc/limeric_budget.hpp> // OAM intento por traer tgo
+#include <vanetza/dcc/transmit_rate_control.hpp> // OAM intento por traer tgo
 #include <vanetza/dcc/fot.hpp> // OAM intento por traer tgo
 #include <vanetza/units/frequency.hpp>
 #include <vanetza/units/length.hpp>
 #include <vanetza/units/time.hpp>
 
 int cbfNodeCounter = -1;
-vanetza::Clock::time_point fotArray[4000];
+//vanetza::Clock::time_point fotArray[4000];
 
 int countTrue = 0;
 int countRealTrue = 0;
@@ -129,10 +132,9 @@ bool CbfPacketBuffer::remove_hopcount(const Identifier& id, uint8_t newHopCount)
     return packet_dropped;
 }
 
-bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRemove, Clock::duration newTimeout)
+bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRemove, Clock::duration newTimeout, Clock::duration maxTimeout)
 {
     bool packet_dropped = false;
-    
     int decision = 0;
     auto& id_map = m_timers.right;
     auto found = id_map.find(id);
@@ -140,8 +142,9 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRem
         auto& packet = found->info;
         // OAM Obtener el hop limit del paquete existente
         uint8_t currentHopCount = packet->hop_limit();
+
         if (flagRemove == 1){
-            std::cout << "Node: " << nodeCounter << " True: " << ++countFakeFalse << " Fake True:" << countTrue <<  "\n";
+            //std::cout << "Node: " << nodeCounter << " True: " << ++countFakeFalse << " Fake True:" << countTrue <<  "\n";
             m_stored_bytes -= packet->length();
             m_counter->remove(id);
             m_packets.erase(packet);
@@ -149,17 +152,37 @@ bool CbfPacketBuffer::remove_hopcount_distance(const Identifier& id, int flagRem
             decision = 1;
             packet_dropped = true;
         } else {
-            std::cout << "Node: " << nodeCounter << " True: " << countFakeFalse << " Fake True:" << ++countTrue << "\n";
+            //std::cout << "Node: " << nodeCounter << " True: " << countFakeFalse << " Fake True:" << ++countTrue << "\n";
             decision = 2;
-            if (newTimeout > Clock::duration::zero()){
+            const Timer nowPushBack {m_runtime, newTimeout};
+            //OAM BEGIN Patadon NN
+            auto expnow = found->second.expiry;
+            auto exppush = nowPushBack.expiry;
+            Clock::duration diff = exppush - expnow;
+            if (diff < maxTimeout){
+                if (found->second < nowPushBack){
                 update(id,newTimeout);
                 std::cout << "Node: " << nodeCounter << " Updated Timeout\n";
                 decision = 3;
-            }        
+                }
+            } else {
+                if (nowPushBack < found->second){
+                update(id,newTimeout);
+                std::cout << "Node: " << nodeCounter << " Updated Timeout\n";
+                decision = 3;
+                }
+            }
+            //OAM END Patadon NN
+            //OAM Patadon optimmizado 
+            /*if (found->second < nowPushBack){
+                update(id,newTimeout);
+                std::cout << "Node: " << nodeCounter << " Updated Timeout\n";
+                decision = 3;
+            }*/        
             packet_dropped = true;
         }
-        /*fileBuffer = fopen("Hopcount.csv","a");
-        fprintf(fileBuffer, "%i,%lu,%i,%lu,%lu\n", nodeCounter, m_runtime.now(), decision, m_runtime.now()+newTimeout, packet->first_rec);
+        /*fileBuffer = fopen("HopCount.csv","a");
+        fprintf(fileBuffer, "%i,%lu,%i,%lu,%g\n", nodeCounter, m_runtime.now(), decision, m_runtime.now()+newTimeout);
         fclose(fileBuffer);*/
     }
 
@@ -195,8 +218,6 @@ void CbfPacketBuffer::add(CbfPacket&& packet, Clock::duration timeout)
 
     Timer timer = { m_runtime, timeout };
     const Identifier id = identifier(packet);
-    packet.first_rec = m_runtime.now();
-    packet.tout = timeout;
     m_packets.emplace_back(std::move(packet));
     using timer_value = timer_bimap::value_type;
     auto insertion = m_timers.insert(timer_value { timer, id, std::prev(m_packets.end()) });
@@ -321,87 +342,32 @@ void CbfPacketBuffer::flush()
 {
     // fetch all expired timers
     const Timer now { m_runtime, std::chrono::seconds(0) };
-    // OAM Establecemos que punto de tiempo es mayor y buscamos la diferencia contra now y agregamos epsilon
-    Clock::duration fot = std::max(fotArray[nodeCounter],m_runtime.now()) - m_runtime.now();
-    if(fot > Clock::duration::zero()){
-        fot = fot + std::chrono::milliseconds(5);
-    }
-    // OAM declaramos el temporizador que servira para el limite superior
-    const Timer nowFot { m_runtime, fot };
-    //auto end = m_timers.left.upper_bound(now); // Original
-    auto endFot = m_timers.left.upper_bound(nowFot);
-    // OAM For para aumentar los timers
-    int valid = -1;
-    int stillValid = -1;
-    int enteredFor1 = 0;
-    int enteredFor2 = 0;
-    for (auto it = m_timers.left.begin(); it != endFot; ++it) {
-        enteredFor1 = 1;
-        const Timer& timer = it->first;
-        CbfPacket& packet = *it->info;
-        bool valid_packet = reduce_lifetime(timer, packet);
-        if (valid_packet) {
-            valid = 1;
-            update_fot(it->second,fot);
-        } else {
-            valid = 0;
-        }
-    }
-    // OAM End
-
-
-    // OAM CODIGO FoT AUMENTADO
-
-    //
-    auto end = m_timers.left.upper_bound(now); // OAM
+    auto end = m_timers.left.upper_bound(now);
     for (auto it = m_timers.left.begin(); it != end;) {
         // reduce LT by queuing time
-        enteredFor2 = 1;//OAM
         const Timer& timer = it->first;
         CbfPacket& packet = *it->info;
         bool valid_packet = reduce_lifetime(timer, packet);
         m_stored_bytes -= packet.length();
         if (valid_packet) {
-            stillValid = 1;
             m_timer_callback(std::move(packet).packet());
-        } else {
-            stillValid = 0;
         }
 
         m_counter->remove(it->second);
         m_packets.erase(it->info);
         it = m_timers.left.erase(it);
     }
+
     // schedule timer if not empty
     if (!m_timers.empty()) {
         schedule_timer();
     }
-
-
-    /*rintf(fileBuffer, "%i,%lu,%li,%li,%i,%i,%i,%i\n", nodeCounter, m_runtime.now(), now.expiry, nowFot.expiry, enteredFor1, valid, enteredFor2, stillValid);
-    fclose(fileBuffer);*/
-
 }
 
 bool CbfPacketBuffer::reduce_lifetime(const Timer& timer, CbfPacket& packet) const
 {
     const auto queuing_time = m_runtime.now() - timer.start;
     return packet.reduce_lifetime(queuing_time) > Clock::duration::zero();
-}
-
-bool CbfPacketBuffer::reduce_lifetime_fot(const Timer& timer, CbfPacket& packet) const
-{
-    const auto queuing_time = m_runtime.now() - timer.start;
-        if(timer.expiry < fotArray[nodeCounter]){
-            const auto fot = std::max(m_runtime.now(),fotArray[nodeCounter]) - m_runtime.now();
-            packet.reduce_lifetime(-fot);
-            return true;
-        } else {
-            return packet.reduce_lifetime(queuing_time) > Clock::duration::zero();
-        }
-
-        
-    
 }
 
 void CbfPacketBuffer::schedule_timer()
